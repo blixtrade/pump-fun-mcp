@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { handle } from "../lib/server.js";
 
 test("initialize negotiates the protocol version", async () => {
@@ -36,7 +37,7 @@ test("unknown tools and methods are protocol errors; notifications get no reply"
 });
 
 test("the stdio server answers line by line and exits when input closes", async () => {
-  const child = spawn(process.execPath, [new URL("../bin/pump-fun-mcp.js", import.meta.url).pathname]);
+  const child = spawn(process.execPath, [fileURLToPath(new URL("../bin/pump-fun-mcp.js", import.meta.url))]);
   let out = "";
   child.stdout.on("data", (d) => (out += d));
   child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18" } }) + "\n");
@@ -50,4 +51,24 @@ test("the stdio server answers line by line and exits when input closes", async 
   assert.equal(lines.find((l) => l.id === 1).result.serverInfo.name, "pump-fun-mcp");
   assert.equal(lines.find((l) => l.error)?.error.code, -32700);
   assert.equal(lines.find((l) => l.id === 2).result.tools.length, 6);
+});
+
+test("null params are treated as empty for methods that ignore them", async () => {
+  const r = await handle({ jsonrpc: "2.0", id: 10, method: "initialize", params: null });
+  assert.equal(r.result.protocolVersion, "2025-06-18");
+  assert.equal(r.result.serverInfo.name, "pump-fun-mcp");
+  assert.equal((await handle({ jsonrpc: "2.0", id: 11, method: "ping", params: null })).result && true, true);
+  assert.equal((await handle({ jsonrpc: "2.0", id: 12, method: "tools/list", params: null })).result.tools.length, 6);
+});
+
+test("null params and non-object arguments on tools/call are invalid params, not crashes", async () => {
+  const missing = await handle({ jsonrpc: "2.0", id: 13, method: "tools/call", params: null });
+  assert.equal(missing.error.code, -32602);
+  assert.doesNotMatch(missing.error.message, /undefined/);
+
+  const badArgs = await handle({ jsonrpc: "2.0", id: 14, method: "tools/call", params: { name: "token_info", arguments: "x" } });
+  assert.equal(badArgs.error.code, -32602);
+
+  const badName = await handle({ jsonrpc: "2.0", id: 15, method: "tools/call", params: { name: 42 } });
+  assert.equal(badName.error.code, -32602);
 });
